@@ -461,6 +461,7 @@ const defaultState = () => ({
   ,repaid: {}    // marejesho: repaid[memberId] = [{d, amount}]
   ,loss: []      // hasara iliyogawanywa: [{id, mid, amt, at, parts:{memberId: kiasi}, tids:[siku zilizofidiwa]}]
   ,history: []   // kumbukumbu za michezo iliyopita (akaunti ni moja)
+  ,part: {}      // malipo ya hisa chache: part[zamu][memberId] = idadi ya hisa zilizolipwa
   ,recvAmt: {}   // kiasi halisi kilicholipwa kila zamu wakati wa kupokea (hakibadiliki baadaye)
   ,ledger: []    // leja: kutoka, hisa, marejesho na madeni ya kusuluhisha
 });
@@ -688,7 +689,7 @@ const minShares = () => (S.group.payout === 'end' && S.group.cycle !== 'members'
 const DAYM = { id: '-day', name: '', shares: 0 };
 const isCashed = id => !!(S.cashed && S.cashed[id]);
 const cashedCount = () => S.members.filter(m => isCashed(m.id)).length;
-const paidSum = m => memberDays(m).reduce((a, r) => a + (r.paid ? r.due : 0), 0);
+const paidSum = m => memberDays(m).reduce((a, r) => a + r.pp, 0);
 const lossList = () => S.loss || [];
 const lossShare = mid => lossList().reduce((a, l) => a + (+((l.parts || {})[mid]) || 0), 0);
 const lossCover = mid => lossList().filter(l => l.mid === mid).reduce((a, l) => a + (+l.amt || 0), 0);
@@ -782,7 +783,15 @@ function defaultView() {
   return i >= 0 ? i : Math.max(0, ds.length - 1);
 }
 const paidMap = tid => S.paid[tid] || (S.paid[tid] = {});
-const collected = tid => S.members.reduce((a, m) => a + (paidMap(tid)[m.id] ? owed(m.id, tid) : 0), 0);
+const clearPart = (tid, mid) => { if (S.part && S.part[tid]) { delete S.part[tid][mid]; if (!Object.keys(S.part[tid]).length) delete S.part[tid]; } };
+const chShares = (mid, tid) => { const a = +S.group.amount || 0; return a > 0 ? Math.round(owed(mid, tid) / a) : 0; };   // hisa zinazochangia siku hiyo
+const partK = (mid, tid) => {   // hisa alizolipa kwa sehemu (0 = hakuna malipo ya sehemu)
+  if ((S.paid[tid] || {})[mid] || isCovered(tid, mid)) return 0;
+  const k = +((S.part || {})[tid] || {})[mid] || 0, n = chShares(mid, tid);
+  return n > 1 ? Math.max(0, Math.min(Math.floor(k), n - 1)) : 0;
+};
+const partAmt = (mid, tid) => partK(mid, tid) * (+S.group.amount || 0);
+const collected = tid => S.members.reduce((a, m) => a + (paidMap(tid)[m.id] ? owed(m.id, tid) : partAmt(m.id, tid)), 0);
 
 function stats() {
   const ds = turnDates(), today = ymd(new Date()), st = {};
@@ -796,7 +805,11 @@ function stats() {
       const o = owed(m.id, tid); if (o <= 0) return;
       st[m.id].total += o;
       if ((S.paid[tid] || {})[m.id] || isCovered(tid, m.id)) { st[m.id].paid += o; if (ymd(ds[i]) > today) st[m.id].ahead += o; }
-      else if (ymd(ds[i]) <= today) st[m.id].debt += o;
+      else {
+        const pa = partAmt(m.id, tid);
+        if (pa > 0) { st[m.id].paid += pa; if (ymd(ds[i]) > today) st[m.id].ahead += pa; }
+        if (ymd(ds[i]) <= today) st[m.id].debt += o - pa;
+      }
     });
   });
   if (endMode()) S.members.forEach(m => { const r = st[m.id]; r.will = Math.max(0, r.total - posho() * m.shares - lossShare(m.id)); r.recv = recvAmt(m); r.ret = returnedAmt(m); r.holds = holdsOthers(m); });
@@ -912,7 +925,7 @@ function receivedPanel() {
 function debtOf(mid) {
   const m = S.members.find(x => x.id === mid); if (!m) return { left: 0, over: 0 };
   const t = ymd(new Date()); let left = 0, over = 0;
-  memberDays(m).forEach(r => { if (r.due > 0 && !r.paid) { left += r.due; if (r.tid && ymd(r.d) <= t) over += r.due; } });
+  memberDays(m).forEach(r => { if (r.due > 0 && !r.paid) { left += r.due - r.pp; if (r.tid && ymd(r.d) <= t) over += r.due - r.pp; } });
   return { left, over };
 }
 function recvNote(r) {
@@ -939,14 +952,15 @@ function memberDays(m) {
     const tid = S.order[i];
     const due = tid ? owed(m.id, tid) : m.shares * a;
     const paid = !!tid && due > 0 && (!!(S.paid[tid] || {})[m.id] || isCovered(tid, m.id));
-    if (paid) cum += due;
-    return { n: i + 1, d, tid, due, paid, cum, rec: tid ? info(tid).m.name : '' };
+    const pp = paid ? due : (tid && due > 0 ? partAmt(m.id, tid) : 0);
+    cum += pp;
+    return { n: i + 1, d, tid, due, paid, pp, cum, rec: tid ? info(tid).m.name : '' };
   });
 }
 function settle() {
   return sortedMembers().map(m => {
     const days = memberDays(m);
-    const due = days.reduce((x, r) => x + r.due, 0), paid = days.reduce((x, r) => x + (r.paid ? r.due : 0), 0);
+    const due = days.reduce((x, r) => x + r.due, 0), paid = days.reduce((x, r) => x + r.pp, 0);
     let recv = 0; if (endMode()) recv = recvAmt(m); else S.order.forEach(tid => { if (S.received[tid] && info(tid).m.id === m.id) recv += recvOf(tid); });
     const turns = turnCount(m), fee = posho() * turns;
     const share = lossShare(m.id), cover = lossCover(m.id), ent = Math.max(0, paid - fee - share);
@@ -974,12 +988,12 @@ function endWarn() {
 }
 function dayTable(m) {
   const rows = memberDays(m), pay = rows.filter(r => r.due > 0), pd = rows.filter(r => r.paid);
-  const sum = pd.reduce((a, r) => a + r.due, 0), fee = posho() * turnCount(m);
+  const sum = rows.reduce((a, r) => a + r.pp, 0), fee = posho() * turnCount(m);
   return `<details class="dd"><summary>Ona siku kwa siku (${pd.length}/${pay.length} amelipa)</summary>
     <div class="dtab">
       <div class="dr h"><span>#</span><span>Tarehe</span><span>Hali</span><span>Jumla</span></div>
       ${rows.map(r => `<div class="dr"><span>${r.n}</span><span>${DAYS[r.d.getDay()].slice(0, 3)} ${r.d.getDate()} ${MONTHS[r.d.getMonth()].slice(0, 3)}<small>${endMode() ? '' : r.tid ? 'Anapokea: ' + esc(r.rec) : 'Hakuna mpokeaji'}</small></span>
-        <span class="st ${r.due <= 0 || !r.tid ? 'own' : r.paid ? 'ok' : 'no'}">${r.due <= 0 ? 'Hachangii' : !r.tid ? money(r.due) : r.paid ? '✓ ' + money(r.due) : '✗ ' + money(r.due)}</span>
+        <span class="st ${r.due <= 0 || !r.tid ? 'own' : r.paid ? 'ok' : 'no'}">${r.due <= 0 ? 'Hachangii' : !r.tid ? money(r.due) : r.paid ? '✓ ' + money(r.due) : r.pp > 0 ? '◐ ' + money(r.pp) + ' / ' + money(r.due) : '✗ ' + money(r.due)}</span>
         <b>${money(r.cum)}</b></div>`).join('')}
     </div>
     <div class="sm" style="margin-top:10px">
@@ -1143,6 +1157,12 @@ function collectPanel() {
 }
 const cashRow = m => { const c = isCashed(m.id), h = holdsOthers(m); return `<div class="rrow"><span class="chip ${c ? 'ok' : 'wait'}">${c ? 'Amechukua ' + money(recvAmt(m)) : 'Hajachukua'}</span><button class="tick rtick" data-a="ctoggle" data-id="${m.id}" aria-pressed="${c}">${c ? 'Amechukua' : 'Bado hajachukua'}</button></div>${h > 0 ? `<div class="rnote owe">Ameshikilia pesa za wengine ${money(h)}<small>Anatakiwa kuzirudisha kabla mchezo haujaisha.</small></div>` : ''}${cashActions(m)}`; };
 
+function shareBits(mid, tid, paid) {
+  const n = chShares(mid, tid); if (paid || n < 2 || isCovered(tid, mid)) return '';
+  const k = partK(mid, tid), a = +S.group.amount || 0;
+  return (k ? `<span class="chip now" style="margin-top:6px">Amelipa hisa ${k} kati ya ${n}. Bado ${money((n - k) * a)}</span>` : '')
+    + `<div><button class="btn ghost small" style="margin-top:8px" data-a="payshares" data-t="${tid}" data-m="${mid}">${k ? 'Badilisha hisa zilizolipwa' : 'Amelipa hisa chache'}</button></div>`;
+}
 function vLeoEnd() {
   view = Math.min(Math.max(view, 0), S.order.length - 1);
   const tid = S.order[view], ds = turnDates(), d = ds[view], ti = todayIdx(), isToday = view === ti;
@@ -1181,8 +1201,8 @@ function vLeoEnd() {
       ${payers.map(x => {
         const p = !!paidMap(tid)[x.id];
         return `<li class="${p ? 'row-paid' : ''}">
-          <div class="grow"><b>${esc(x.name)}</b><small>Hisa ${x.shares}. Amechangia ${money(sm[x.id].paid)}<br>Atapokea mwisho ${money(sm[x.id].will)}${typeof paidMap(tid)[x.id] === 'string' ? '<br>Alilipa ' + shortD(parseD(paidMap(tid)[x.id])) : ''}</small>${!p && isCovered(tid, x.id) ? '<span class="chip ok" style="margin-top:6px">Imefidiwa na kundi</span>' : ''}${!p && claimPend(x.id, tid) ? '<span class="chip now" style="margin-top:6px">Anasema amelipa</span>' : ''}</div>
-          <div class="amt">${money(owed(x.id, tid))}</div>
+          <div class="grow"><b>${esc(x.name)}</b><small>Hisa ${x.shares}. Amechangia ${money(sm[x.id].paid)}<br>Atapokea mwisho ${money(sm[x.id].will)}${typeof paidMap(tid)[x.id] === 'string' ? '<br>Alilipa ' + shortD(parseD(paidMap(tid)[x.id])) : ''}</small>${!p && isCovered(tid, x.id) ? '<span class="chip ok" style="margin-top:6px">Imefidiwa na kundi</span>' : ''}${!p && claimPend(x.id, tid) ? '<span class="chip now" style="margin-top:6px">Anasema amelipa</span>' : ''}${shareBits(x.id, tid, p)}</div>
+          <div class="amt">${money(owed(x.id, tid) - partAmt(x.id, tid))}</div>
           <button class="tick" data-a="pay" data-t="${tid}" data-m="${x.id}" aria-pressed="${p}">${p ? 'Amelipa' : 'Bado'}</button>
         </li>`;
       }).join('') || `<li><div class="grow">Hakuna anayechangia siku hii.</div></li>`}
@@ -1276,8 +1296,8 @@ function vLeo() {
       ${payers.map(x => {
         const p = !!paidMap(tid)[x.id];
         return `<li class="${p ? 'row-paid' : ''}">
-          <div class="grow"><b>${esc(x.name)}</b><small>Hisa ${x.shares}. Amechangia ${money(sm[x.id].paid)}<br>Atapokea jumla ${money(sm[x.id].will)}${typeof paidMap(tid)[x.id] === 'string' ? '<br>Alilipa ' + shortD(parseD(paidMap(tid)[x.id])) : ''}</small>${!p && isCovered(tid, x.id) ? '<span class="chip ok" style="margin-top:6px">Imefidiwa na kundi</span>' : ''}${!p && claimPend(x.id, tid) ? '<span class="chip now" style="margin-top:6px">Anasema amelipa</span>' : ''}</div>
-          <div class="amt">${money(owed(x.id, tid))}</div>
+          <div class="grow"><b>${esc(x.name)}</b><small>Hisa ${x.shares}. Amechangia ${money(sm[x.id].paid)}<br>Atapokea jumla ${money(sm[x.id].will)}${typeof paidMap(tid)[x.id] === 'string' ? '<br>Alilipa ' + shortD(parseD(paidMap(tid)[x.id])) : ''}</small>${!p && isCovered(tid, x.id) ? '<span class="chip ok" style="margin-top:6px">Imefidiwa na kundi</span>' : ''}${!p && claimPend(x.id, tid) ? '<span class="chip now" style="margin-top:6px">Anasema amelipa</span>' : ''}${shareBits(x.id, tid, p)}</div>
+          <div class="amt">${money(owed(x.id, tid) - partAmt(x.id, tid))}</div>
           <button class="tick" data-a="pay" data-t="${tid}" data-m="${x.id}" aria-pressed="${p}">${p ? 'Amelipa' : 'Bado'}</button>
         </li>`;
       }).join('') || `<li><div class="grow">Hakuna anayechangia zamu hii.</div></li>`}
@@ -2093,7 +2113,7 @@ function simulate(fn) {
 }
 function purgeTids(test) {
   S.order = S.order.filter(t => !test(t));
-  [S.paid, S.received, S.recvAmt].forEach(o => { if (o) Object.keys(o).forEach(t => { if (test(t)) delete o[t]; }); });
+  [S.paid, S.part, S.received, S.recvAmt].forEach(o => { if (o) Object.keys(o).forEach(t => { if (test(t)) delete o[t]; }); });
   S.recvLog = (S.recvLog || []).filter(x => !test(x.t));
 }
 function mutExit(mid) {
@@ -2101,6 +2121,7 @@ function mutExit(mid) {
   S.members = S.members.filter(x => x.id !== mid);
   [S.cashed, S.cashAmt, S.repaid].forEach(o => { if (o) delete o[mid]; });
   Object.keys(S.paid).forEach(t => { if (S.paid[t]) delete S.paid[t][mid]; });
+  Object.keys(S.part || {}).forEach(t => clearPart(t, mid));
 }
 function swapPrefixes(A, B) {
   const sw = t => { const i = t.indexOf('@'), p = i < 0 ? t : t.slice(0, i), r = i < 0 ? '' : t.slice(i); return (p === A ? B : p === B ? A : p) + r; };
@@ -2327,8 +2348,20 @@ document.addEventListener('click', e => {
     case 'today': view = todayIdx(); render(); break;
     case 'open': view = +d.i; tab = 'leo'; render(); window.scrollTo(0, 0); break;
     case 'pay': { const gk = d.t + '|' + d.m, nt = Date.now(); if (gk === payLastKey && nt - payLastAt < 600) break; payLastKey = gk; payLastAt = nt;
-      if (isCovered(d.t, d.m)) { toast('Siku hii imefidiwa na kundi. Tengua mgawanyo wa hasara kwanza.'); break; } const p = paidMap(d.t); if (p[d.m]) delete p[d.m]; else { p[d.m] = ymd(new Date()); claimDrop(d.m, d.t); } save(); render(); break; }
-    case 'payall': { const p = paidMap(tid); S.members.forEach(m => { if (owed(m.id, tid) > 0 && !p[m.id] && !isCovered(tid, m.id)) { p[m.id] = ymd(new Date()); claimDrop(m.id, tid); } }); save(); render(); toast('Wote wamewekwa wamelipa'); break; }
+      if (isCovered(d.t, d.m)) { toast('Siku hii imefidiwa na kundi. Tengua mgawanyo wa hasara kwanza.'); break; } const p = paidMap(d.t); if (p[d.m]) delete p[d.m]; else { p[d.m] = ymd(new Date()); clearPart(d.t, d.m); claimDrop(d.m, d.t); } save(); render(); break; }
+    case 'payshares': { const t = d.t, mid = d.m, mm = S.members.find(x => x.id === mid); if (!mm) break;
+      const n = chShares(mid, t), a = +S.group.amount || 0, k0 = partK(mid, t);
+      if (n < 2) { toast('Mwanachama huyu ana hisa 1 tu siku hii'); break; }
+      ask(`<b>${esc(mm.name)}</b> amelipa hisa ngapi?<br><span class="hint">Siku hii anachangia hisa ${n}, kila hisa ni ${money(a)}. Weka 0 kuondoa malipo ya sehemu. Akimaliza, gusa "Bado" ili awe "Amelipa".</span><input type="number" id="sh-in" inputmode="numeric" min="0" max="${n}" value="${k0 || 1}" style="margin-top:10px">`, 'Hifadhi', () => {
+        const inp = document.getElementById('sh-in'), v = Math.floor(+(inp && inp.value));
+        if (!(v >= 0) || v > n) { toast('Weka hisa kati ya 0 na ' + n); return; }
+        if (v >= n) { paidMap(t)[mid] = ymd(new Date()); clearPart(t, mid); claimDrop(mid, t); save(); render(); toast('Amelipa hisa zote ' + n); return; }
+        if (v === 0) { clearPart(t, mid); save(); render(); toast('Malipo ya sehemu yameondolewa'); return; }
+        S.part = S.part || {}; (S.part[t] = S.part[t] || {})[mid] = v;
+        save(); render(); toast('Amelipa hisa ' + v + ' kati ya ' + n + '. Bado ' + money((n - v) * a));
+      }, '');
+      break; }
+    case 'payall': { const p = paidMap(tid); S.members.forEach(m => { if (owed(m.id, tid) > 0 && !p[m.id] && !isCovered(tid, m.id)) { p[m.id] = ymd(new Date()); clearPart(tid, m.id); claimDrop(m.id, tid); } }); save(); render(); toast('Wote wamewekwa wamelipa'); break; }
     case 'claim-ok': claimOk(d.m); break;
     case 'claim-no': claimNo(d.m); break;
     case 'recv': {
@@ -2363,7 +2396,7 @@ document.addEventListener('click', e => {
         syncOrder(); view = defaultView(); save(); render(); toast('Mzunguko umebadilishwa');
       };
       if (a === 'cycle' ? S.group.cycle === d.v : (S.group.payout === 'end') === (d.v === 'end')) break;
-      const hasData = S.started && (Object.values(S.paid).some(p => Object.keys(p).length) || Object.keys(S.received).length || Object.keys(S.cashed || {}).length);
+      const hasData = S.started && (Object.values(S.paid).some(p => Object.keys(p).length) || Object.keys(S.part || {}).length || Object.keys(S.received).length || Object.keys(S.cashed || {}).length);
       if (hasData && (a === 'payout' || d.v === 'members' || S.group.cycle === 'members')) ask('Kubadilisha aina ya mzunguko kutafuta malipo na mapokezi yaliyokwisha wekwa. Endelea?', 'Badilisha', apply);
       else apply();
       break;
@@ -2504,7 +2537,7 @@ document.addEventListener('click', e => {
     case 'newround':
       ask('Anza mzunguko mpya na wanachama walewale? Mchezo huu utahifadhiwa kwenye Historia, kisha zamu, malipo na mapokezi vitaanza upya.', 'Anza mzunguko mpya', () => {
         const kept = archiveGame();
-        S.order = []; S.paid = {}; S.received = {}; S.recvLog = []; S.recvAmt = {}; S.ledger = []; S.cashed = {}; S.cashAmt = {}; S.repaid = {}; S.loss = []; S.finished = false; S.finishedOn = ''; S.started = false;
+        S.order = []; S.paid = {}; S.part = {}; S.received = {}; S.recvLog = []; S.recvAmt = {}; S.ledger = []; S.cashed = {}; S.cashAmt = {}; S.repaid = {}; S.loss = []; S.finished = false; S.finishedOn = ''; S.started = false;
         S.group.start = ymd(new Date()); wizStep = 1; tab = 'nyumbani'; view = 0; save(); render(); window.scrollTo(0, 0);
         toast(kept ? 'Mchezo uliopita umehifadhiwa kwenye Historia' : 'Mzunguko mpya umeanza');
       }); break;
@@ -2519,7 +2552,7 @@ document.addEventListener('click', e => {
       const sel = payList().filter(x => payPick.has(x.tid));
       if (!sel.length) { toast('Chagua siku za kulipia'); break; }
       if (!payDate) { toast('Chagua tarehe ya kulipa'); break; }
-      sel.forEach(x => { if (!isCovered(x.tid, payM)) paidMap(x.tid)[payM] = payDate; });
+      sel.forEach(x => { if (!isCovered(x.tid, payM)) { paidMap(x.tid)[payM] = payDate; clearPart(x.tid, payM); } });
       payPick.clear(); save(); render(); toast('Malipo ya siku ' + sel.length + ' yamehifadhiwa'); break;
     }
     case 'punpay': {
@@ -2852,12 +2885,12 @@ function staleBox() {
 }
 function memDayTable(m) {
   const rows = memberDays(m), pay = rows.filter(r => r.due > 0), pd = rows.filter(r => r.paid);
-  const sum = pd.reduce((a, r) => a + r.due, 0), fee = posho() * turnCount(m);
+  const sum = rows.reduce((a, r) => a + r.pp, 0), fee = posho() * turnCount(m);
   return `<section class="panel"><div class="pad"><details class="dd" style="margin-top:0;border-top:0;padding-top:0"><summary>Malipo siku kwa siku (${pd.length}/${pay.length} umelipa)</summary>
     <div class="dtab">
       <div class="dr h"><span>#</span><span>Tarehe</span><span>Hali</span><span>Jumla</span></div>
       ${rows.map(r => `<div class="dr"><span>${r.n}</span><span>${DAYS[r.d.getDay()].slice(0, 3)} ${r.d.getDate()} ${MONTHS[r.d.getMonth()].slice(0, 3)}<small>${endMode() ? '' : r.tid ? 'Anapokea: ' + esc(r.rec) : 'Hakuna mpokeaji'}</small></span>
-        <span class="st ${r.due <= 0 || !r.tid ? 'own' : r.paid ? 'ok' : 'no'}">${r.due <= 0 ? 'Huchangii' : !r.tid ? money(r.due) : r.paid ? '✓ ' + money(r.due) : '✗ ' + money(r.due)}</span>
+        <span class="st ${r.due <= 0 || !r.tid ? 'own' : r.paid ? 'ok' : 'no'}">${r.due <= 0 ? 'Huchangii' : !r.tid ? money(r.due) : r.paid ? '✓ ' + money(r.due) : r.pp > 0 ? '◐ ' + money(r.pp) + ' / ' + money(r.due) : '✗ ' + money(r.due)}</span>
         <b>${money(r.cum)}</b></div>`).join('')}
     </div>
     <div class="sm" style="margin-top:10px">
@@ -2939,8 +2972,8 @@ function mvLeo(m) {
   </div></section>
   <section class="panel"><div class="pad"><h2>Nani amelipa</h2></div>
     <ul class="list">${payers.map(x => {
-      const p = !!(S.paid[tid] || {})[x.id];
-      return `<li class="${x.id === m.id ? 'mine' : ''}"><div class="grow"><b>${esc(x.name)}${x.id === m.id ? youTag : ''}</b></div><div class="amt">${money(owed(x.id, tid))}</div><span class="chip ${p ? 'ok' : past ? 'late' : 'wait'}">${p ? 'Amelipa' : 'Bado'}</span></li>`;
+      const p = !!(S.paid[tid] || {})[x.id], pk = partK(x.id, tid), pn = chShares(x.id, tid);
+      return `<li class="${x.id === m.id ? 'mine' : ''}"><div class="grow"><b>${esc(x.name)}${x.id === m.id ? youTag : ''}</b></div><div class="amt">${money(owed(x.id, tid) - partAmt(x.id, tid))}</div><span class="chip ${p ? 'ok' : pk ? 'now' : past ? 'late' : 'wait'}">${p ? 'Amelipa' : pk ? 'Hisa ' + pk + '/' + pn : 'Bado'}</span></li>`;
     }).join('') || '<li><div class="grow">Hakuna anayechangia siku hii.</div></li>'}</ul></section>`;
 }
 function mvRatiba(m) {
@@ -3201,7 +3234,7 @@ function claimsAdmin() {
 function claimOk(mid) {
   const c = payReq[mid], m = S.members.find(x => x.id === mid), gid = chatGidNow(); if (!c || !m) return;
   const t0 = ymd(new Date()); let n = 0;
-  c.tids.forEach(t => { if (S.order.includes(t) && owed(mid, t) > 0 && !paidMap(t)[mid]) { paidMap(t)[mid] = t0; n++; } });
+  c.tids.forEach(t => { if (S.order.includes(t) && owed(mid, t) > 0 && !paidMap(t)[mid]) { paidMap(t)[mid] = t0; clearPart(t, mid); n++; } });
   delete payReq[mid]; if (gid) chatCol(gid, 'payreq').doc(mid).delete().catch(() => {});
   save(); render(); toast(m.name + ' ametikiwa (siku ' + n + ')');
 }
