@@ -1,10 +1,10 @@
 // Upatu service worker: inafanya app ifunguke hata bila mtandao
-const VERSION = 'upatu-v1';
+const VERSION = 'upatu-v2';
 const SHELL = ['./', './index.html', './manifest.webmanifest',
   './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(VERSION).then(c => Promise.all(SHELL.map(u => c.add(u).catch(() => {})))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {
