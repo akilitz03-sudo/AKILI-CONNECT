@@ -37,7 +37,7 @@ button{font:inherit;cursor:pointer;color:inherit}
 .icon:disabled{opacity:.35}
 
 /* Fomu */
-input[type=text],input[type=number],input[type=date],input[type=password],select,textarea{width:100%;min-height:46px;border:1.5px solid var(--mstari);border-radius:12px;padding:0 12px;font:inherit;font-size:16px;background:var(--karatasi);color:var(--bahari)}
+input[type=text],input[type=number],input[type=date],input[type=password],input[type=tel],select,textarea{width:100%;min-height:46px;border:1.5px solid var(--mstari);border-radius:12px;padding:0 12px;font:inherit;font-size:16px;background:var(--karatasi);color:var(--bahari)}
 textarea{padding:10px 12px;min-height:90px;resize:vertical}
 label.f{display:block;font-weight:600;font-size:.92rem;margin:14px 0 6px}
 .hint{color:var(--bahari2);font-size:.85rem;margin-top:4px}
@@ -221,6 +221,8 @@ body.setup{padding-bottom:40px}
 .mdetail{margin-top:10px;border-top:1px solid var(--mstari)}
 .msec{padding:14px 0;border-bottom:1px solid var(--mstari)}
 .msec:last-of-type{border-bottom:0}
+.phrow{display:grid;grid-template-columns:1fr auto;gap:10px}
+.phrow .btn{min-height:46px}
 .msec h4{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--bahari2);margin-bottom:8px}
 .mtools{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .mtools .chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
@@ -253,7 +255,8 @@ body.setup{padding-bottom:40px}
 .dline{display:flex;justify-content:space-between;gap:12px;align-items:baseline;padding:10px 0;border-top:1px solid var(--mstari)}
 .dline:first-of-type{border-top:0}
 .dline span{color:var(--bahari2)}
-.dline b{white-space:nowrap}
+.dline b{white-space:nowrap;margin-left:auto}
+.dline{align-items:center}
 .bar2-l{font-size:.82rem;color:var(--bahari2);margin-top:4px}
 .zline{margin-top:12px;font-size:.92rem;overflow-wrap:anywhere}
 .zline span{color:var(--bahari2)}
@@ -435,6 +438,21 @@ const KEY = 'upatu-data-v1';
 const $ = s => document.querySelector(s);
 const uid = () => Math.random().toString(36).slice(2, 9);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+/* ========== Namba za simu za wanachama (zinabaki kwa kijumbe tu, hazipelekwi kwa wanachama wengine) ========== */
+const noPhone = (k, v) => k === 'phone' ? undefined : v;
+function normPhone(raw) {
+  let d = String(raw || '').replace(/\D/g, ''); if (!d) return '';
+  if (d.startsWith('00')) d = d.slice(2);
+  if (/^0\d{9}$/.test(d)) return '255' + d.slice(1);
+  if (/^[67]\d{8}$/.test(d)) return '255' + d;
+  if (/^255\d{9}$/.test(d)) return d;
+  return /^\d{11,15}$/.test(d) ? d : '';
+}
+const fmtPhone = p => /^255\d{9}$/.test(p || '') ? '0' + p.slice(3, 6) + ' ' + p.slice(6, 9) + ' ' + p.slice(9) : (p ? '+' + p : '');
+const waTo = (m, text) => 'https://wa.me/' + (m && m.phone ? m.phone : '') + '?text=' + encodeURIComponent(text);
+const smsTo = (m, text) => 'sms:+' + m.phone + '?&body=' + encodeURIComponent(String(text).replace(/\*/g, ''));
+
 const money = n => 'TSh ' + Math.round(n).toLocaleString('en-US');
 const DAYS = ['Jumapili','Jumatatu','Jumanne','Jumatano','Alhamisi','Ijumaa','Jumamosi'];
 const MONTHS = ['Januari','Februari','Machi','Aprili','Mei','Juni','Julai','Agosti','Septemba','Oktoba','Novemba','Desemba'];
@@ -585,7 +603,9 @@ const authReady = () => new Promise(res => { if (!fbAuth) return res(null); cons
 const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
 const parseState = raw => { const p = JSON.parse(raw); if (!p || !Array.isArray(p.members)) throw new Error('bad'); return p; };
 function adoptState(p) {
+  const ph = {}; (S.members || []).forEach(m => { if (m.phone) ph[m.id] = m.phone; });
   S = Object.assign(defaultState(), p);
+  (S.members || []).forEach(m => { if (!m.phone && ph[m.id]) m.phone = ph[m.id]; });
   S.group = Object.assign(defaultState().group, p.group || {});
   if (!(p.group || {}).cycle) S.group.cycle = (p.group && p.group.end) ? 'dates' : 'members';
   if (p.started === undefined && (p.members || []).length) S.started = true;
@@ -597,7 +617,7 @@ async function localWrite(v) {
 async function cloudWrite(at) {
   if (!cloudOn() || !cloudUser) return false;
   try {
-    await withTimeout(fbDb.collection(COL).doc(cloudUser.uid).set({ data: JSON.stringify(S), at, owner: cloudUser.uid }), 15000);
+    await withTimeout(fbDb.collection(COL).doc(cloudUser.uid).set({ data: JSON.stringify(S, noPhone), at, owner: cloudUser.uid }), 15000);
     cloudState = 'ok'; return true;
   } catch (e) {
     if (cloudState !== 'err') toast('Imeshindikana kuhifadhi mtandaoni. Data imehifadhiwa kwenye simu.');
@@ -1006,11 +1026,163 @@ function dayTable(m) {
   </details>`;
 }
 function memMessage(m) {
-  const r = settle().find(x => x.m.id === m.id), rows = memberDays(m);
+  const r = settle().find(x => x.m.id === m.id), rows = memberDays(m), sm = statsMap()[m.id], tt = endMode() ? '' : turnsOf(m.id);
   let t = `*${S.group.name}*\nTaarifa ya *${m.name}* (hisa ${m.shares})\nSiku ${r.days} × ${money(S.group.amount)} × hisa ${m.shares}\n\n`;
   t += rows.filter(x => x.tid && x.due > 0).map(x => `Siku ${x.n} (${x.d.getDate()}/${x.d.getMonth() + 1}): ${x.paid ? 'Amelipa' : 'Hajalipa'} ${money(x.due)}`).join('\n');
   t += `\n\nAnatakiwa kuwekeza: ${money(r.due)}\nAmewekeza hadi sasa: ${money(r.paid)}\nPosho ya kijumbe: ${money(r.fee)}\nAnastahili kupokea mwisho: ${money(r.final)}${recvCount(m.id) && r.unpaid > 0 ? `\nAmesha lipwa. Bado anadaiwa: ${money(r.unpaid)}` : ''}`;
+  if (sm && sm.debt > 0) t += `\n*Deni la siku zilizopita: ${money(sm.debt)}*`;
+  if (tt) t += `\nZamu yake: ${tt}`;
+  return t + `\n\nAsante.`;
+}
+
+/* ========== Kadi za kuvutia (picha) kwa WhatsApp. Asiye WhatsApp anatumiwa maandishi kwa SMS ========== */
+const CC = { bahari: '#0F3D45', bahari2: '#4B6469', zafarani: '#F4B41A', karafuu: '#A83240', majani: '#2F7D4E', chumvi: '#F4F6F1', mstari: '#DDE3DA', karatasi: '#FFFFFF' };
+const FH = s => `800 ${s}px "Bricolage Grotesque","Figtree",system-ui,sans-serif`;
+const FB = (w, s) => `${w} ${s}px "Figtree",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif`;
+function rr(c, x, y, w, h, r) { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); }
+function kangaBand(c, x, y, w, h, dark) {
+  c.fillStyle = CC.zafarani; c.fillRect(x, y, w, h); c.fillStyle = dark;
+  for (let i = -1; i * h < w; i++) { c.beginPath(); c.moveTo(x + i * h, y); c.lineTo(x + i * h + h / 2, y + h); c.lineTo(x + i * h + h, y); c.closePath(); c.fill(); }
+}
+function fitSize(c, text, font, size, maxW, min) { let s = size; for (; s > min; s -= 2) { c.font = font(s); if (c.measureText(text).width <= maxW) break; } return s; }
+function wrapLines(c, text, maxW) {
+  const out = []; let line = '';
+  String(text).split(' ').forEach(w => { const t = line ? line + ' ' + w : w; if (c.measureText(t).width > maxW && line) { out.push(line); line = w; } else line = t; });
+  if (line) out.push(line); return out;
+}
+async function cardFonts() {
+  try { await Promise.race([Promise.all(['800 40px "Bricolage Grotesque"', '400 30px "Figtree"', '500 30px "Figtree"', '600 30px "Figtree"', '700 30px "Figtree"'].map(f => document.fonts.load(f))), new Promise(r => setTimeout(r, 1500))]); } catch (e) {}
+}
+function paintCard(c, W, k, m) {
+  const P = 56, IW = W - P * 2, g = S.group, rem = k === 'rem', hero = rem ? CC.karafuu : CC.bahari;
+  const sm = statsMap()[m.id], kj = String(g.kijumbe || '').trim();
+  c.textBaseline = 'alphabetic';
+  // mandhari
+  c.fillStyle = CC.chumvi; c.fillRect(0, 0, W, 4000);
+  c.fillStyle = hero; c.fillRect(0, 0, W, 350);
+  kangaBand(c, 0, 0, W, 30, hero);
+  c.textAlign = 'left';
+  c.fillStyle = CC.zafarani; let sz = fitSize(c, String(g.name).toUpperCase(), s => FB(700, s), 32, IW, 20); c.font = FB(700, sz); c.fillText(String(g.name).toUpperCase(), P, 108);
+  c.fillStyle = 'rgba(255,255,255,.78)'; c.font = FB(600, 34); c.fillText(rem ? 'Kumbusho la kulipa mchango' : 'Taarifa ya mchango wako', P, 166);
+  c.fillStyle = '#fff'; sz = fitSize(c, m.name, FH, 96, IW, 44); c.font = FH(sz); c.fillText(m.name, P, 262);
+  c.fillStyle = 'rgba(255,255,255,.78)'; c.font = FB(500, 32); c.fillText('Hisa ' + m.shares + '  ·  ' + fmtLong(new Date()), P, 318);
+  let y = 350 + 40;
+  const card = (h, color) => { c.fillStyle = color || CC.karatasi; rr(c, P, y, IW, h, 32); c.fill(); if (!color) { c.strokeStyle = CC.mstari; c.lineWidth = 2; c.stroke(); } };
+  const rowsCard = rows => {
+    const h = rows.length * 96 + 16; card(h);
+    rows.forEach((r, i) => {
+      const ry = y + 8 + i * 96;
+      if (i) { c.fillStyle = CC.mstari; c.fillRect(P + 36, ry, IW - 72, 2); }
+      c.textAlign = 'left'; c.fillStyle = CC.bahari2; c.font = FB(500, 34); c.fillText(r[0], P + 40, ry + 60);
+      c.textAlign = 'right'; c.fillStyle = r[2] === 'bad' ? CC.karafuu : r[2] === 'good' ? CC.majani : CC.bahari; c.font = FB(700, 38); c.fillText(r[1], P + IW - 40, ry + 60);
+    });
+    c.textAlign = 'left'; y += h + 28;
+  };
+  if (!rem) {
+    const r = settle().find(x => x.m.id === m.id), pct = r.due ? Math.min(100, Math.round(r.paid / r.due * 100)) : 100, tt = endMode() ? '' : turnsOf(m.id);
+    card(300);
+    c.fillStyle = CC.bahari2; c.font = FB(600, 34); c.fillText('Amewekeza hadi sasa', P + 40, y + 70);
+    c.fillStyle = CC.bahari; c.font = FH(fitSize(c, money(r.paid), FH, 96, IW - 80, 50)); c.fillText(money(r.paid), P + 40, y + 164);
+    const bx = P + 40, bw = IW - 80; c.fillStyle = CC.mstari; rr(c, bx, y + 196, bw, 26, 13); c.fill();
+    if (pct > 0) { c.fillStyle = pct >= 100 ? CC.majani : CC.zafarani; rr(c, bx, y + 196, Math.max(26, bw * pct / 100), 26, 13); c.fill(); }
+    c.fillStyle = CC.bahari2; c.font = FB(500, 30); c.fillText(pct + '% ya jumla ya ' + money(r.due), P + 40, y + 266);
+    y += 300 + 28;
+    const rows = [['Anatakiwa kuwekeza', money(r.due)], ['Amewekeza', money(r.paid)], ['Bado hajalipa', money(r.unpaid), r.unpaid > 0 ? 'bad' : '']];
+    if (r.fee > 0) rows.push(['Posho ya kijumbe', '− ' + money(r.fee)]);
+    rows.push(['Anastahili kupokea', money(r.final), 'good']);
+    if (r.recv > 0) rows.push(['Ameshapokea', money(r.recv)]);
+    rowsCard(rows);
+    if (sm && sm.debt > 0) {
+      c.font = FB(700, 38); const l1 = wrapLines(c, 'Deni la siku zilizopita: ' + money(sm.debt), IW - 80), h = l1.length * 50 + 100; card(h, CC.karafuu);
+      c.fillStyle = '#fff'; l1.forEach((t, i) => c.fillText(t, P + 40, y + 62 + i * 50));
+      c.font = FB(500, 30); c.fillStyle = 'rgba(255,255,255,.88)'; c.fillText('Tafadhali lipa mapema.', P + 40, y + 62 + l1.length * 50 + 6);
+      y += h + 28;
+    }
+    if (tt) {
+      c.font = FB(700, 36); const l2 = wrapLines(c, 'Zamu yako: ' + tt, IW - 80), h = l2.length * 50 + 52; card(h, CC.zafarani);
+      c.fillStyle = CC.bahari; l2.forEach((t, i) => c.fillText(t, P + 40, y + 60 + i * 50)); y += h + 28;
+    }
+  } else {
+    const days = unpaidDays(m), tot = days.reduce((a, x) => a + x.left, 0);
+    card(290);
+    c.fillStyle = CC.bahari2; c.font = FB(600, 34); c.fillText('Jumla ya kulipa', P + 40, y + 72);
+    c.fillStyle = CC.karafuu; c.font = FH(fitSize(c, money(tot), FH, 112, IW - 80, 54)); c.fillText(money(tot), P + 40, y + 176);
+    c.fillStyle = CC.bahari2; c.font = FB(500, 30); c.fillText('Siku ' + days.length + (days.length === 1 ? ' haijalipwa' : ' hazijalipwa'), P + 40, y + 248);
+    y += 290 + 28;
+    const shown = days.slice(-7), older = days.slice(0, days.length - shown.length), rows = [];
+    if (older.length) rows.push(['Siku ' + older.length + ' za awali', money(older.reduce((a, x) => a + x.left, 0)), 'bad']);
+    shown.forEach(x => rows.push([DAYS[x.d.getDay()] + ' ' + x.d.getDate() + ' ' + MONTHS[x.d.getMonth()].slice(0, 3), money(x.left), 'bad']));
+    rowsCard(rows);
+    card(130, CC.zafarani); c.fillStyle = CC.bahari; c.textAlign = 'center'; c.font = FB(700, 40); c.fillText('Tafadhali lipa mapema. Asante!', W / 2, y + 80); c.textAlign = 'left'; y += 130 + 28;
+  }
+  c.textAlign = 'center'; c.fillStyle = CC.bahari2;
+  if (!rem) { c.font = FB(600, 32); c.fillText('Asante kwa kuchangia', W / 2, y + 40); y += 52; }
+  if (kj) { c.font = FB(500, 30); c.fillText('Kijumbe: ' + kj, W / 2, y + 40); y += 52; }
+  c.textAlign = 'left'; y += 24;
+  kangaBand(c, 0, y, W, 24, hero); y += 24;
+  return y;
+}
+async function makeCard(m, k) {
+  await cardFonts();
+  const W = 1080, probe = document.createElement('canvas'); probe.width = W; probe.height = 4000;
+  const H = paintCard(probe.getContext('2d'), W, k, m), cv = document.createElement('canvas'); cv.width = W; cv.height = Math.ceil(H);
+  paintCard(cv.getContext('2d'), W, k, m);
+  return await new Promise((res, rej) => cv.toBlob(b => b ? res(b) : rej(new Error('blob')), 'image/png'));
+}
+let cardCtx = null;
+const cardCaption = (m, k) => k === 'rem' ? `*${S.group.name}*\nHabari ${m.name}, kumbusho la mchango wako. Tafadhali lipa mapema.` : `*${S.group.name}*\nHabari ${m.name}, hii hapa taarifa yako ya mchango.`;
+function cardSave() {
+  if (!cardCtx) return;
+  const a = document.createElement('a'); a.href = cardCtx.url; a.download = 'upatu-' + String(cardCtx.name).replace(/[^\w-]+/g, '_') + '.png';
+  document.body.appendChild(a); a.click(); a.remove();
+}
+async function openCard(m, k) {
+  const el = $('#modal'); el.innerHTML = '<div class="sheet"><p>Inatengeneza kadi...</p></div>'; el.hidden = false;
+  try {
+    const blob = await makeCard(m, k);
+    if (cardCtx && cardCtx.url) URL.revokeObjectURL(cardCtx.url);
+    cardCtx = { mid: m.id, k, blob, url: URL.createObjectURL(blob), name: m.name };
+    el.innerHTML = `<div class="sheet" role="dialog" aria-modal="true"><p>${k === 'rem' ? 'Kadi ya kumkumbusha' : 'Kadi ya taarifa'}: ${esc(m.name)}</p>
+      <img src="${cardCtx.url}" alt="Kadi ya ${esc(m.name)}" style="display:block;width:100%;max-height:52vh;object-fit:contain;border-radius:12px;margin:10px 0;background:var(--chumvi)">
+      <div class="btns" style="flex-direction:column">
+        <button class="btn" data-a="cardshare">Tuma kwa WhatsApp</button>
+        ${m.phone ? `<button class="btn ghost" data-a="cardchat">Fungua chat ya ${esc(fmtPhone(m.phone))}</button>` : ''}
+        <button class="btn ghost" data-a="cardsave">Hifadhi picha</button>
+        <button class="btn ghost" data-a="mcancel">Funga</button></div>
+      <div class="hint" style="margin-top:8px">"Tuma kwa WhatsApp" inafungua orodha ya kushiriki, kisha unachagua ${esc(m.name)}. "Fungua chat" inahifadhi picha na kufungua chat yake moja kwa moja, kisha unaambatanisha picha.</div></div>`;
+  } catch (e) {
+    closeModal(); toast('Kadi imeshindikana, ujumbe wa kawaida umefunguliwa.');
+    window.open(waTo(m, k === 'rem' ? reminderMessage(m) : memMessage(m)), '_blank');
+  }
+}
+function actBtns(m, k) {
+  const wa = k === 'mem' ? 'memwa' : 'remwa', sm = k === 'mem' ? 'memsms' : 'remsms', lbl = k === 'mem' ? 'Ripoti' : 'Kumbusha';
+  if (m.nowa) return m.phone ? `<button class="btn small" data-a="${sm}" data-id="${m.id}">${lbl} kwa SMS</button>` : '';
+  return `<button class="btn small" data-a="${wa}" data-id="${m.id}">${lbl} (WhatsApp)</button>${m.phone ? `<button class="btn ghost small" data-a="${sm}" data-id="${m.id}">SMS</button>` : ''}`;
+}
+function unpaidDays(m) {
+  const ds = turnDates(), today = ymd(new Date()), gl = gameDates().length, out = [];
+  S.order.forEach((tid, i) => {
+    if (i >= gl || ymd(ds[i]) > today) return;
+    const o = owed(m.id, tid); if (o <= 0) return;
+    if ((S.paid[tid] || {})[m.id] || isCovered(tid, m.id)) return;
+    const left = o - partAmt(m.id, tid); if (left > 0) out.push({ d: ds[i], left });
+  });
+  return out;
+}
+function reminderMessage(m) {
+  const days = unpaidDays(m), tot = days.reduce((a, x) => a + x.left, 0), shown = days.slice(-10);
+  let t = `*${S.group.name}*\nHabari ${m.name}, huu ni ukumbusho wa mchango wako wa upatu.\n\n`;
+  if (days.length > shown.length) t += `Siku ${days.length - shown.length} za awali pia hazijalipwa.\n`;
+  t += shown.map(x => `- ${x.d.getDate()}/${x.d.getMonth() + 1}: ${money(x.left)}`).join('\n');
+  t += `\n\n*Jumla ya kulipa: ${money(tot)}*\nTafadhali lipa mapema. Asante.`;
+  const kj = String(S.group.kijumbe || '').trim(); if (kj) t += `\n${kj}`;
   return t;
+}
+function sendBody() {
+  return `<div class="hint" style="margin:0 0 6px">WhatsApp inatumiwa kadi ya picha. Aliyewekwa "Hayupo WhatsApp" anatumiwa maandishi kwa SMS. Namba na mpangilio huo vinawekwa kwenye kadi ya mwanachama.</div>` +
+    sortedMembers().map(m => `<div style="padding:10px 0;border-top:1px solid var(--mstari)"><b>${esc(m.name)}</b><div class="hint">${m.phone ? esc(fmtPhone(m.phone)) : 'Hana namba bado'}</div>
+      <div class="btns" style="margin-top:8px">${actBtns(m, 'mem')}${unpaidDays(m).length ? actBtns(m, 'rem') : ''}</div></div>`).join('');
 }
 function settlePanel() {
   if (!S.members.length || !S.order.length) return '';
@@ -1519,7 +1691,7 @@ function vNyumbani() {
 
   <section class="panel"><div class="pad">
     <h2>Wanaodaiwa${debtors.length ? ' (' + debtors.length + ')' : ''}</h2>
-    ${debtors.length ? debtors.slice(0, 5).map(r => `<div class="dline"><span>${esc(r.m.name)}</span><b class="owe">${money(r.debt)}</b></div>`).join('') + (debtors.length > 5 ? `<p class="hint">Na wengine ${debtors.length - 5}. Tazama tab ya Wanachama.</p>` : '')
+    ${debtors.length ? debtors.slice(0, 5).map(r => `<div class="dline"><span>${esc(r.m.name)}</span><b class="owe">${money(r.debt)}</b><button class="btn ghost small" data-a="remwa" data-id="${r.m.id}">Kumbusha</button></div>`).join('') + (debtors.length > 5 ? `<p class="hint">Na wengine ${debtors.length - 5}. Tazama tab ya Wanachama.</p>` : '')
       : '<p class="hint" style="margin:6px 0 0">Hakuna anayedaiwa kwa siku zilizopita. Wote wako sawa.</p>'}
   </div></section>
 
@@ -1761,6 +1933,16 @@ function memberCard(m, r, sr, pend) {
       </div>
       ${recvNote(r)}
     </div>
+    <div class="msec"><h4>Namba ya simu</h4>
+      <div class="phrow"><input type="tel" id="ph-${m.id}" inputmode="tel" autocomplete="off" placeholder="0712 345 678" value="${esc(fmtPhone(m.phone))}" aria-label="Namba ya simu ya ${esc(m.name)}"><button class="btn small" data-a="phsave" data-id="${m.id}">Hifadhi</button></div>
+      <div class="hint">Ripoti na taarifa zake zitatumwa kwa namba hii. Namba inabaki kwenye simu yako tu, wanachama wengine hawaioni.</div>
+      ${m.phone ? `<label class="clr"><input type="checkbox" data-a="nowa" data-id="${m.id}" ${m.nowa ? 'checked' : ''}><div class="grow"><b>Hayupo WhatsApp</b><small>Atatumiwa maandishi tu kwa SMS, bila kadi</small></div></label>` : ''}<div class="btns" style="margin-top:10px">${actBtns(m, 'mem')}</div>
+    </div>
+    ${r.debt > 0 ? `<div class="msec"><h4>Kumkumbusha kulipa</h4>
+      <div class="hint" style="margin:0 0 8px">Anadaiwa ${money(r.debt)}. Ujumbe wa ukumbusho utaorodhesha siku ambazo hajalipa.</div>
+      <div class="btns">${actBtns(m, 'rem')}</div>
+      ${m.phone ? '' : '<div class="hint">Weka namba yake juu ili ukumbusho umfikie moja kwa moja.</div>'}
+    </div>` : ''}
     <div class="msec"><h4>Kupokea pesa</h4>${recvHtml}</div>
     <div class="msec"><h4>Michango</h4>
       <div class="facts">
@@ -1816,6 +1998,7 @@ function vWanachama() {
     <div class="add">
       <input type="text" id="nm" placeholder="Jina" autocomplete="off" aria-label="Jina la mwanachama">
       <input type="number" id="sh" value="1" min="1" max="20" inputmode="numeric" aria-label="Idadi ya hisa">
+      <input type="tel" id="nph" inputmode="tel" autocomplete="off" placeholder="Namba ya simu (hiari)" aria-label="Namba ya simu ya mwanachama" style="grid-column:1/-1">
       <button class="btn" data-a="addm">Ongeza</button>
     </div>
     <p class="hint">Mtu mwenye hisa 2 anapata zamu 2 na anachangia kwa hisa zote mbili.${S.started ? ' Mchezo umeshaanza: utaulizwa anaanza kuchanga lini.' : ''}</p>
@@ -1824,6 +2007,7 @@ function vWanachama() {
   const orphanPend = ledgerList().filter(x => x.amt && !x.done && !S.members.some(m => m.id === x.mid)).length;
   return `
   ${secBox('add', 'Mwanachama mpya', '', addForm)}
+  ${S.members.length ? secBox('send', 'Tuma ripoti kwa wanachama', S.members.filter(m => m.phone).length + ' kati ya ' + S.members.length + ' wana namba', sendBody()) : ''}
   ${S.members.length ? `<div class="sumline"><b>Wanachama ${S.members.length}, hisa ${totalShares()}</b><span class="${totalDebt > 0 ? 'debt' : ''}">Deni la wote: ${money(totalDebt)}</span></div>
   ${sortedMembers().map(m => memberCard(m, sm[m.id], sr[m.id], pendIds.has(m.id))).join('')}` : ''}
   ${settleHtml ? secBox('settle', 'Hesabu ya kundi', 'Jumla ya mchezo, posho na hasara', unwrapPanel(settleHtml)) : ''}
@@ -1898,13 +2082,14 @@ function vSetup() {
     <div class="add">
       <input type="text" id="nm" placeholder="Jina" autocomplete="off" aria-label="Jina la mwanachama">
       <input type="number" id="sh" value="1" min="1" max="20" inputmode="numeric" aria-label="Idadi ya hisa">
+      <input type="tel" id="nph" inputmode="tel" autocomplete="off" placeholder="Namba ya simu (hiari)" aria-label="Namba ya simu ya mwanachama" style="grid-column:1/-1">
       <button class="btn" data-a="addm">Ongeza</button>
     </div>
     <p class="hint">Mtu mwenye hisa 2 anapata zamu 2 na anachangia kwa hisa zote mbili.</p>
   </div>
   ${S.members.length ? `<ul class="list">
     ${S.members.map(m => `<li>
-      <div class="grow"><b>${esc(m.name)}</b><small>Hisa ${m.shares}</small></div>
+      <div class="grow"><b>${esc(m.name)}</b><small>Hisa ${m.shares}${m.phone ? ' · ' + esc(fmtPhone(m.phone)) : ''}</small></div>
       <div class="stepper">
         <button data-a="shm" data-id="${m.id}" aria-label="Punguza hisa" ${m.shares <= 1 ? 'disabled' : ''}>−</button>
         <span>${m.shares}</span>
@@ -2271,9 +2456,9 @@ function shareUpOk() {
 }
 
 /* --- Kuongeza mwanachama mchezo ukiwa umeanza --- */
-function joinOpen(name, shares) {
+function joinOpen(name, shares, phone) {
   const t = ymd(new Date()), nx = nextTurnDate(), past = turnDates().filter(d => ymd(d) <= t).length, a = +S.group.amount || 0;
-  xctx = { kind: 'jn', name, shares, nx, t };
+  xctx = { kind: 'jn', name, shares, phone, nx, t };
   sheet(`<h3>Ongeza ${esc(name)}</h3>
     <div class="hint">Hisa ${shares}. Mchezo umeshaanza, kwa hiyo chagua anaanza kuchanga lini ili asidaiwe isivyo haki. Zamu zake zitawekwa mwisho wa ratiba.</div>
     <label class="clr"><input type="radio" name="jn-f" value="next" checked><div class="grow"><b>Kuanzia siku ijayo</b><small>${fmtLong(parseD(nx))}</small></div></label>
@@ -2283,10 +2468,10 @@ function joinOpen(name, shares) {
 }
 function joinOk() {
   if (!xctx || xctx.kind !== 'jn') return;
-  const { name, shares, nx, t } = xctx, pick = document.querySelector('input[name="jn-f"]:checked'), v = pick ? pick.value : 'next';
+  const { name, shares, phone, nx, t } = xctx, pick = document.querySelector('input[name="jn-f"]:checked'), v = pick ? pick.value : 'next';
   const from = v === 'today' ? t : v === 'start' ? '' : nx;
   closeModal(); xctx = null;
-  const m = { id: uid(), name, shares }; if (from) m.sf = Array(shares).fill(from);
+  const m = { id: uid(), name, shares }; if (phone) m.phone = phone; if (from) m.sf = Array(shares).fill(from);
   S.members.push(m); syncOrder(); view = defaultView();
   ledgerAdd({ kind: 'join', mid: m.id, name, amt: 0, label: `Amejiunga na hisa ${shares}, ${from ? 'anaanza kuchanga ' + fmtLong(parseD(from)) : 'anachanga tangu mwanzo'}` });
   save(); render(); toast(name + ' ameongezwa');
@@ -2369,7 +2554,28 @@ document.addEventListener('click', e => {
       confirmRecv(info(tid).m.id, tid); break;
     }
     case 'settlewa': window.open('https://wa.me/?text=' + encodeURIComponent(settleMessage()), '_blank'); break;
-    case 'memwa': window.open('https://wa.me/?text=' + encodeURIComponent(memMessage(S.members.find(x => x.id === d.id))), '_blank'); break;
+    case 'memwa': { const m = S.members.find(x => x.id === d.id); if (!m) break; if (m.nowa) { if (m.phone) window.location.href = smsTo(m, memMessage(m)); else toast('Weka namba yake kwanza ili atumiwe SMS'); break; } openCard(m, 'rep'); break; }
+    case 'nowa': { const m = S.members.find(x => x.id === d.id); if (m) { if (b.checked) m.nowa = true; else delete m.nowa; save(); render(); } break; }
+    case 'cardsave': cardSave(); break;
+    case 'cardshare': {
+      if (!cardCtx) break; const m = S.members.find(x => x.id === cardCtx.mid); if (!m) break;
+      const data = { files: [new File([cardCtx.blob], 'upatu.png', { type: 'image/png' })], text: cardCaption(m, cardCtx.k) };
+      if (navigator.canShare && navigator.canShare(data)) navigator.share(data).catch(err => { if (err && err.name !== 'AbortError') { cardSave(); toast('Kushiriki kumeshindikana. Picha imehifadhiwa, itume kupitia WhatsApp.'); } });
+      else { cardSave(); toast('Picha imehifadhiwa. Itume kupitia WhatsApp.'); }
+      break;
+    }
+    case 'cardchat': { if (!cardCtx) break; const m = S.members.find(x => x.id === cardCtx.mid); if (!m) break; cardSave(); window.open(waTo(m, cardCaption(m, cardCtx.k)), '_blank'); toast('Picha imehifadhiwa. Iambatanishe kwenye chat.'); break; }
+    case 'remwa': { const m = S.members.find(x => x.id === d.id); if (!m) break; if (!unpaidDays(m).length) { toast(m.name + ' hana deni'); break; } if (m.nowa) { if (m.phone) window.location.href = smsTo(m, reminderMessage(m)); else toast('Weka namba yake kwanza ili atumiwe SMS'); break; } openCard(m, 'rem'); break; }
+    case 'remsms': { const m = S.members.find(x => x.id === d.id); if (m && m.phone && unpaidDays(m).length) window.location.href = smsTo(m, reminderMessage(m)); break; }
+    case 'memsms': { const m = S.members.find(x => x.id === d.id); if (m && m.phone) window.location.href = smsTo(m, memMessage(m)); break; }
+    case 'phsave': {
+      const m = S.members.find(x => x.id === d.id), el = document.getElementById('ph-' + d.id); if (!m || !el) break;
+      const raw = el.value.trim();
+      if (!raw) { delete m.phone; save(); render(); toast('Namba imeondolewa'); break; }
+      const ph = normPhone(raw);
+      if (!ph) { toast('Namba si sahihi. Mfano: 0712 345 678'); el.focus(); break; }
+      m.phone = ph; save(); render(); toast('Namba ya ' + m.name + ' imehifadhiwa'); break;
+    }
     case 'endfix': S.group.end = d.v; syncOrder(); save(); render(); toast('Tarehe ya kuisha imerekebishwa'); break;
     case 'roundfix': {
       const n = parseInt(d.v); if (!(n > 0)) break;
@@ -2472,8 +2678,10 @@ document.addEventListener('click', e => {
     case 'addm': {
       const name = $('#nm').value.trim(), shares = Math.min(20, Math.max(1, parseInt($('#sh').value) || 1));
       if (!name) { toast('Andika jina la mwanachama'); $('#nm').focus(); break; }
-      if (S.started) { if (S.finished) { toast('Mchezo umekwisha. Fungua tena kwanza.'); break; } joinOpen(name, shares); break; }
-      S.members.push({ id: uid(), name, shares });
+      const phEl = $('#nph'), phRaw = phEl ? phEl.value.trim() : '', phone = normPhone(phRaw);
+      if (phRaw && !phone) { toast('Namba si sahihi. Mfano: 0712 345 678'); phEl.focus(); break; }
+      if (S.started) { if (S.finished) { toast('Mchezo umekwisha. Fungua tena kwanza.'); break; } joinOpen(name, shares, phone); break; }
+      S.members.push(phone ? { id: uid(), name, shares, phone } : { id: uid(), name, shares });
       syncOrder(); save(); render(); toast(name + ' ameongezwa'); $('#nm').focus(); break;
     }
     case 'shp': { const m = S.members.find(x => x.id === d.id); if (S.started) { shareUpOpen(m.id); break; } m.shares = Math.min(20, m.shares + 1); syncOrder(); save(); render(); break; }
@@ -2677,7 +2885,7 @@ function normCode(input) {
   return c.replace(/^m=/, '').replace(/\s+/g, '');
 }
 async function encodeSnap() {
-  const raw = new TextEncoder().encode(JSON.stringify({ v: 1, at: new Date().toISOString(), S }));
+  const raw = new TextEncoder().encode(JSON.stringify({ v: 1, at: new Date().toISOString(), S }, noPhone));
   if (window.CompressionStream) { try { return 'G.' + toB64u(await pipeBytes(raw, new CompressionStream('gzip'))); } catch (e) {} }
   return 'R.' + toB64u(raw);
 }
