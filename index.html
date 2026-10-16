@@ -488,6 +488,7 @@ const defaultState = () => ({
   ,part: {}      // malipo ya hisa chache: part[zamu][memberId] = idadi ya hisa zilizolipwa
   ,recvAmt: {}   // kiasi halisi kilicholipwa kila zamu wakati wa kupokea (hakibadiliki baadaye)
   ,ledger: []    // leja: kutoka, hisa, marejesho na madeni ya kusuluhisha
+  ,exits: []     // walioacha mchezo njiani: {id, mid, name, shares, at, day, of, paid, taken, loss, fee, net, turns, end, lid}
 });
 let S = defaultState();
 let tab = 'nyumbani', view = 0, pending = null, recvFilter = 'all', histOpen = null;
@@ -1203,6 +1204,7 @@ function settlePanel() {
       <span>Mchango wa hisa 1 kwa siku zote</span><b>${money(S.group.amount * gd.length)}</b>
     </div>
     ${endWarn()}
+    ${exitsList().length ? `<div class="rnote owe">Walioacha mchezo njiani (${exitsList().length})<small>${exitsList().map(x => esc(x.name) + ' (hisa ' + x.shares + ')').join(', ')}. Zamu na michango yao imeondolewa, tarehe ya kuisha haijabadilika.</small></div>` : ''}
     <p class="hint">Tarehe ya kuisha inabadilishwa kwenye Kundi.</p>
     <div class="sm">
       <span>Jumla wanayotakiwa kuwekeza</span><b>${money(T.due)}</b>
@@ -1221,7 +1223,7 @@ function settleMessage() {
   const rows = settle(), T = settleTotals(rows);
   let t = `*${S.group.name}*\nHesabu kamili ya mchezo\nKuanzia ${fmtLong(parseD(S.group.start))} hadi ${fmtLong(cutoffDate())} (siku ${gameDates().length})\nMchango wa siku kwa hisa 1: ${money(S.group.amount)}\n\n`;
   t += rows.map(r => `*${r.m.name}* (hisa ${r.m.shares})\nAnatakiwa kuwekeza: ${money(r.due)}\nPosho ya kijumbe: ${money(r.fee)}\nAnastahili kupokea mwisho: ${money(r.final)}\nAmewekeza hadi sasa: ${money(r.paid)}${r.unpaid > 0 ? '\nBado hajalipa: ' + money(r.unpaid) : ''}\nAmeshapokea: ${money(r.recv)}${endMode() && r.ret > 0 ? '\nAmerejesha: ' + money(r.ret) : ''}${r.share > 0 ? '\nMgawo wa hasara ya pamoja: -' + money(r.share) : ''}${r.cover > 0 ? '\nDeni lililofidiwa na kundi: ' + money(r.cover) : ''}${endMode() && r.holds > 0 ? '\n*Anatakiwa kurudisha: ' + money(r.holds) + '*' : ''}${recvCount(r.m.id) && r.unpaid > 0 ? '\n*Amesha lipwa, bado anadaiwa: ' + money(r.unpaid) + '*' : ''}`).join('\n\n');
-  t += `\n\n*Jumla*\nWanayotakiwa kuwekeza: ${money(T.due)}\nPosho ya kijumbe: ${money(T.fee)}\nJumla ya kupokea mwisho: ${money(T.final)}`;
+  t += `\n\n*Jumla*\nWanayotakiwa kuwekeza: ${money(T.due)}\nPosho ya kijumbe: ${money(T.fee)}\nJumla ya kupokea mwisho: ${money(T.final)}` + exitsText();
   return t;
 }
 function endInfo() {
@@ -1784,6 +1786,8 @@ function vFinished() {
     </ul>
   </section>
 
+  ${exitsList().length ? `<section class="panel"><div class="pad"><h2>Walioacha mchezo njiani</h2></div>${exitsPanel()}</section>` : ''}
+
   <div class="btns">
     <button class="btn full" data-a="newround">Anza mzunguko mpya</button>
     <button class="btn ghost full" data-a="hist">Historia ya michezo iliyopita (${(S.history || []).length})</button>
@@ -1805,6 +1809,7 @@ function archiveGame() {
       finished: !!S.finished, finishedOn: S.finishedOn || '', mode: endMode() ? 'end' : 'turns',
       amount: +S.group.amount || 0, posho: posho(), shares: totalShares(), doneN: f.doneN, N: f.N,
       tot: { paid: Math.round(f.totalPaid), taken: Math.round(f.taken), held: Math.round(f.held), left: Math.round(f.left), fee: Math.round(T.fee), ret: Math.round(f.retTotal || 0), holds: Math.round(f.holds || 0) },
+      exits: exitsList().map(x => ({ name: x.name, shares: x.shares, at: x.at, paid: x.paid, fee: x.fee, net: x.net })),
       members: f.st.map(r => ({ id: r.m.id, name: r.m.name, shares: r.m.shares, paid: Math.round(r.paid), recv: Math.round(r.recv), left: Math.round(Math.max(0, r.total - r.paid)), fee: Math.round((sm[r.m.id] || {}).fee || 0) }))
     };
     S.history = S.history || []; S.history.push(e); return true;
@@ -1815,6 +1820,7 @@ function histReport(h) {
   t += `Zilizochangwa: ${money(h.tot.paid)}\nZilizochukuliwa: ${money(h.tot.taken)}\nZilizobaki mkononi: ${money(h.tot.held)}\n`;
   if (h.tot.left > 0) t += `Malipo ambayo hayakulipwa: ${money(h.tot.left)}\n`;
   t += '\nWanachama:\n' + h.members.map(r => `- ${r.name}: alilipa ${money(r.paid)}, alipokea ${money(r.recv)}${r.left > 0 ? ', alibaki kulipa ' + money(r.left) : ''}`).join('\n');
+  if ((h.exits || []).length) t += '\n\nWalioacha njiani:\n' + h.exits.map(x => `- ${x.name} (hisa ${x.shares}): alichangia ${money(x.paid)}${x.fee ? ', makato ' + money(x.fee) : ''}, ${x.net >= 0 ? 'alirudishiwa ' : 'anadaiwa '}${money(Math.abs(x.net))}`).join('\n');
   return t;
 }
 const histLink = () => (S.history || []).length ? `<section class="panel"><div class="pad"><h2>Michezo iliyopita (${S.history.length})</h2><p class="hint">Kumbukumbu za michezo ya nyuma zimehifadhiwa kwenye akaunti hii hii.</p><div class="btns"><button class="btn ghost small" data-a="hist">Fungua historia</button></div></div></section>` : '';
@@ -2017,6 +2023,7 @@ function vWanachama() {
   ${S.members.length ? `<div class="sumline"><b>Wanachama ${S.members.length}, hisa ${totalShares()}</b><span class="${totalDebt > 0 ? 'debt' : ''}">Deni la wote: ${money(totalDebt)}</span></div>
   ${sortedMembers().map(m => memberCard(m, sm[m.id], sr[m.id], pendIds.has(m.id))).join('')}` : ''}
   ${settleHtml ? secBox('settle', 'Hesabu ya kundi', 'Jumla ya mchezo, posho na hasara', unwrapPanel(settleHtml)) : ''}
+  ${exitsList().length ? secBox('exits', 'Walioacha mchezo (' + exitsList().length + ')', 'Mchezo unaisha ' + fmtLong(cutoffDate()), exitsPanel()) : ''}
   ${ledgerHtml ? secBox('ledger', 'Waliotoka kundini', orphanPend ? `Bado ${orphanPend} za kusuluhisha` : 'Marejesho na madeni', unwrapPanel(ledgerHtml)) : ''}`;
 }
 
@@ -2307,6 +2314,13 @@ function purgeTids(test) {
   [S.paid, S.part, S.received, S.recvAmt].forEach(o => { if (o) Object.keys(o).forEach(t => { if (test(t)) delete o[t]; }); });
   S.recvLog = (S.recvLog || []).filter(x => !test(x.t));
 }
+// Mwanachama akiacha njiani, tarehe ya mchezo kuisha inashikiliwa ile ile (zamu zilizobaki zinajazwa upya)
+function freezeEnd() {
+  if (cycleDays() > 0) return ymd(cutoffDate());
+  const e = ymd(cutoffDate()), g = S.group;
+  g.cycle = 'dates'; g.end = e;
+  return e;
+}
 function mutExit(mid) {
   purgeTids(t => t.startsWith(mid + '#'));
   S.members = S.members.filter(x => x.id !== mid);
@@ -2354,7 +2368,7 @@ function nextTurnDate() { const t = ymd(new Date()), d = turnDates().find(x => y
 function exitPlan(mid) {
   const m = S.members.find(x => x.id === mid); if (!m) return { err: 'Mwanachama hapatikani' };
   if (lossSubject(mid)) return { err: 'Deni la mwanachama huyu lilishagawanywa kwa kundi. Funga mchezo kwanza.' };
-  const bf = statsMap(), sim = simulate(() => mutExit(mid));
+  const bf = statsMap(), sim = simulate(() => { freezeEnd(); mutExit(mid); });
   if (sim.shares < minShares()) return { err: `Kundi linahitaji hisa angalau ${minShares()}. Ongeza mwanachama kwanza.` };
   const df = diffs(bf, sim.sm), paid = Math.round(bf[mid].paid), taken = Math.round(cashTaken(m)), loss = Math.round(lossShare(mid));
   const others = S.members.filter(x => x.id !== mid && df[x.id] > 0).map(x => ({ id: x.id, name: x.name, amt: df[x.id] }));
@@ -2376,7 +2390,8 @@ function exitOpen(mid) {
     </div>
     ${endMode() && posho() > 0 ? `<div class="hint">Posho ya kijumbe kwa hisa zake ni ${money(posho() * pl.m.shares)}. Ukitaka kuikata, iandike kwenye makato.</div>` : ''}
     ${pl.others.length ? `<div class="warnbox">Marejesho kwa wengine<small>Siku za zamu zake zinafutwa, kwa hiyo malipo waliyoweka kwa siku hizo yanarudishwa:</small>${pl.others.map(o => `<small>${esc(o.name)}: ${money(o.amt)}</small>`).join('')}</div>` : ''}
-    ${pl.nTurns ? `<div class="warnbox">Zamu ${pl.nTurns} zitafutwa${pl.nRecv ? `, na ${pl.nRecv} kati yake alishapokea` : ''}. Ratiba itasogea mbele na tarehe za zamu zilizobaki zitabadilika.${pl.nRecv ? '<small>Pesa alizopokea zimehesabiwa kwenye matokeo hapo juu.</small>' : ''}</div>` : ''}
+    <div class="hint" style="margin-top:10px">Mchezo utaendelea kuisha ${fmtLong(cutoffDate())}. Siku zitakazobaki wazi zitajazwa na zamu za marudio kwa wanachama waliobaki.</div>
+    ${pl.nTurns ? `<div class="warnbox">Zamu ${pl.nTurns} zitafutwa${pl.nRecv ? `, na ${pl.nRecv} kati yake alishapokea` : ''}. Tarehe za zamu zilizobaki zitabadilika, lakini tarehe ya mwisho haibadiliki.${pl.nRecv ? '<small>Pesa alizopokea zimehesabiwa kwenye matokeo hapo juu.</small>' : ''}</div>` : ''}
     <div class="btns"><button class="btn ghost" data-a="mcancel">Ghairi</button><button class="btn danger" data-a="ex-ok">Mtoe</button></div>`);
   calcNet('ex-fee', 'ex-net');
 }
@@ -2385,13 +2400,17 @@ function exitOk() {
   const mid = xctx.mid, fee = feeVal('ex-fee'), pl = exitPlan(mid);
   if (pl.err) { toast(pl.err); return; }
   const net = pl.paid - pl.taken - pl.loss - fee, name = pl.m.name;
+  const gd = gameDates(), tday = ymd(new Date()), dayNo = gd.filter(d => ymd(d) <= tday).length, total = gd.length;
   closeModal(); xctx = null;
+  const endKept = freezeEnd();
   mutExit(mid); syncOrder(); view = defaultView();
-  ledgerAdd({ kind: 'toka', mid, name, amt: net, label: `Ametolewa kundini${fee ? '. Makato ' + money(fee) : ''}`, detail: `Alichangia ${money(pl.paid)}${pl.taken ? ', alipokea ' + money(pl.taken) : ''}${pl.loss ? ', mgawo wa hasara ' + money(pl.loss) : ''}` });
+  const lid = uid();
+  ledgerAdd({ id: lid, kind: 'toka', mid, name, amt: net, label: `Ameacha mchezo njiani${fee ? '. Makato ' + money(fee) : ''}`, detail: `Alichangia ${money(pl.paid)}${pl.taken ? ', alipokea ' + money(pl.taken) : ''}${pl.loss ? ', mgawo wa hasara ' + money(pl.loss) : ''}` });
   pl.others.forEach(o => ledgerAdd({ kind: 'toka', mid: o.id, name: o.name, amt: o.amt, label: `Rejesho: siku za zamu za ${name} zimefutwa` }));
-  save(); render(); toast(`${name} ametolewa`);
+  S.exits = S.exits || [];
+  S.exits.push({ id: uid(), mid, name, shares: pl.m.shares, at: new Date().toISOString(), day: dayNo, of: total, paid: Math.round(pl.paid), taken: Math.round(pl.taken), loss: Math.round(pl.loss), fee, net: Math.round(net), turns: pl.nTurns, end: endKept, lid });
+  save(); render(); toast(`${name} ameandikwa kama ameacha mchezo`);
 }
-
 /* --- Kupunguza hisa --- */
 function shareDownPlan(mid) {
   const m = S.members.find(x => x.id === mid); if (!m) return { err: 'Mwanachama hapatikani' };
@@ -2489,6 +2508,22 @@ function ledgerRow(x) {
     const btn = x.amt ? `<button class="btn small ${x.done ? 'ghost' : ''}" data-a="${x.done ? 'lg-undo' : 'lg-done'}" data-id="${x.id}" style="margin-top:6px">${x.done ? 'Tengua' : x.amt > 0 ? 'Nimemlipa' : 'Nimepokea'}</button>` : '';
     const st = !x.amt ? '' : x.done ? `<span class="chip ok">${x.amt > 0 ? 'Amelipwa' : 'Amelipa'}</span>` : `<span class="chip ${x.amt > 0 ? 'now' : 'late'}">${x.amt > 0 ? 'Mlipe' : 'Anadaiwa'}</span>`;
     return `<li><div class="grow"><b>${esc(x.name)}</b> ${st}<small class="blk">${esc(x.label)}${x.detail ? '<br>' + esc(x.detail) : ''}<br>${shortD(new Date(x.at))}${x.done && x.doneAt ? ', imefungwa ' + shortD(new Date(x.doneAt)) : ''}</small></div><div style="text-align:right">${amtH}${btn}</div></li>`;
+}
+const exitsList = () => S.exits || [];
+function exitLine(x) {
+  const lg = ledgerList().find(l => l.id === x.lid);
+  const st = !x.net ? '' : lg && lg.done ? `<span class="chip ok">${x.net > 0 ? 'Amelipwa' : 'Amelipa'}</span>` : x.net > 0 ? '<span class="chip now">Mlipe</span>' : '<span class="chip late">Anadaiwa</span>';
+  const lbl = x.net >= 0 ? (lg && lg.done ? 'Alirudishiwa' : 'Arudishiwe') : 'Anadaiwa';
+  return `<li><div class="grow"><b>${esc(x.name)}</b> <span class="chip wait">Ameacha</span> ${st}<small class="blk">Hisa ${x.shares}. Aliacha ${fmtLong(new Date(x.at))}${x.day ? ' (siku ya ' + x.day + ' kati ya ' + x.of + ')' : ''}.<br>Alichangia ${money(x.paid)}${x.taken ? ', alipokea ' + money(x.taken) : ''}${x.loss ? ', mgawo wa hasara ' + money(x.loss) : ''}${x.fee ? ', makato ' + money(x.fee) : ''}.<br>Zamu ${x.turns} zilifutwa.</small></div><div style="text-align:right"><small class="blk" style="color:var(--bahari2)">${lbl}</small><div class="amt ${x.net >= 0 ? 'lg-in' : 'lg-out'}">${money(Math.abs(x.net))}</div></div></li>`;
+}
+function exitsPanel() {
+  const X = exitsList(); if (!X.length) return '';
+  return `<div class="pad"><p class="hint">Walioacha mchezo njiani. Mchezo bado unaisha <b>${fmtLong(cutoffDate())}</b>, tarehe haikubadilika.</p></div>
+    <ul class="list">${X.slice().reverse().map(exitLine).join('')}</ul>`;
+}
+function exitsText() {
+  const X = exitsList(); if (!X.length) return '';
+  return '\n\n*Walioacha mchezo njiani*\n' + X.map(x => `- ${x.name} (hisa ${x.shares}): aliacha ${fmtLong(new Date(x.at))}, alichangia ${money(x.paid)}${x.fee ? ', makato ' + money(x.fee) : ''}, ${x.net >= 0 ? 'alirudishiwa ' : 'anadaiwa '}${money(Math.abs(x.net))}`).join('\n');
 }
 function ledgerPanel() {
   const L = ledgerList().filter(x => !x.mid || !S.members.some(m => m.id === x.mid)); if (!L.length) return '';
@@ -2751,7 +2786,7 @@ document.addEventListener('click', e => {
     case 'newround':
       ask('Anza mzunguko mpya na wanachama walewale? Mchezo huu utahifadhiwa kwenye Historia, kisha zamu, malipo na mapokezi vitaanza upya.', 'Anza mzunguko mpya', () => {
         const kept = archiveGame();
-        S.order = []; S.paid = {}; S.part = {}; S.received = {}; S.recvLog = []; S.recvAmt = {}; S.ledger = []; S.cashed = {}; S.cashAmt = {}; S.repaid = {}; S.loss = []; S.finished = false; S.finishedOn = ''; S.started = false;
+        S.order = []; S.paid = {}; S.part = {}; S.received = {}; S.recvLog = []; S.recvAmt = {}; S.ledger = []; S.exits = []; S.cashed = {}; S.cashAmt = {}; S.repaid = {}; S.loss = []; S.finished = false; S.finishedOn = ''; S.started = false;
         S.group.start = ymd(new Date()); wizStep = 1; tab = 'nyumbani'; view = 0; save(); render(); window.scrollTo(0, 0);
         toast(kept ? 'Mchezo uliopita umehifadhiwa kwenye Historia' : 'Mzunguko mpya umeanza');
       }); break;
