@@ -1009,7 +1009,7 @@ function endWarn() {
   if (endMode()) return h;
   const btn = n => `<button type="button" class="btn small" data-a="roundfix" data-v="${n}">Weka siku ${n}</button> `;
   if (D > 0 && D < shares) h += `<div class="warnbox">Siku ni ${D}, lakini hisa ni ${shares}. Hisa ${shares - D} hazitapata zamu ndani ya kipindi hiki, na hesabu hazitalingana kwa wote.<small>${btn(shares)}</small></div>`;
-  else if (D > shares && shares > 0 && D % shares) { const dn = D - D % shares, up = dn + shares; h += `<div class="warnbox">Siku ni ${D} na hisa ni ${shares}. Mzunguko wa mwisho haujakamilika, kwa hiyo baadhi ya wanachama wanapokea zamu zaidi ya wengine na hesabu hazilingani.<small>Chagua mzunguko kamili: ${dn > 0 ? btn(dn) : ''}${btn(up)}</small></div>`; }
+  else if (D > shares && shares > 0 && D % shares) { const dn = D - D % shares, up = dn + shares; h += `<div class="hint" style="margin:10px 0">Mchezo ni siku ${D} kama ulivyoweka. Hisa ni ${shares}, kwa hiyo zamu ${D % shares} za mwisho zinarudia kwa wa kwanza. Ukitaka kila mtu apokee idadi sawa, unaweza kuchagua mzunguko kamili: ${dn > 0 ? btn(dn) : ''}${btn(up)}</div>`; }
   else if (D > shares && shares > 0) h += `<div class="warnbox">Siku ni ${D} na hisa ni ${shares}, kwa hiyo mzunguko unarudia mara ${D / shares}. Kila mtu anapokea kila mzunguko.</div>`;
   return h;
 }
