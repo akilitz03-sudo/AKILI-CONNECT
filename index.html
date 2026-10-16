@@ -2635,16 +2635,18 @@ document.addEventListener('click', e => {
     case 'cycle': case 'payout': {
       const apply = () => {
         if (a === 'cycle') {
-          if (d.v === 'members') S.group.payout = 'turns'; else if (S.group.cycle === 'members') S.group.payout = 'end';
+          // Ukichagua siku au tarehe, wote wanachukua mwisho pamoja (kila hisa = mchango x siku). Zamu ni kwa "Zamu kwa kila mwanachama" tu.
+          if (d.v === 'members') S.group.payout = 'turns'; else S.group.payout = 'end';
           S.group.cycle = d.v;
           if (d.v === 'days' && !(parseInt(S.group.days) > 0)) S.group.days = 30;
           if (d.v === 'dates' && (!S.group.end || S.group.end < S.group.start)) S.group.end = ymd(addDays(parseD(S.group.start), 29));
         } else S.group.payout = d.v;
         syncOrder(); view = defaultView(); save(); render(); toast('Mzunguko umebadilishwa');
       };
-      if (a === 'cycle' ? S.group.cycle === d.v : (S.group.payout === 'end') === (d.v === 'end')) break;
+      const wantPayout = a === 'cycle' ? (d.v === 'members' ? 'turns' : 'end') : d.v;
+      if (a === 'cycle' ? (S.group.cycle === d.v && S.group.payout === wantPayout) : (S.group.payout === 'end') === (d.v === 'end')) break;
       const hasData = S.started && (Object.values(S.paid).some(p => Object.keys(p).length) || Object.keys(S.part || {}).length || Object.keys(S.received).length || Object.keys(S.cashed || {}).length);
-      if (hasData && (a === 'payout' || d.v === 'members' || S.group.cycle === 'members')) ask('Kubadilisha aina ya mzunguko kutafuta malipo na mapokezi yaliyokwisha wekwa. Endelea?', 'Badilisha', apply);
+      if (hasData && (a === 'payout' || d.v === 'members' || S.group.cycle === 'members' || S.group.payout !== wantPayout)) ask('Kubadilisha aina ya mzunguko kutafuta malipo na mapokezi yaliyokwisha wekwa. Endelea?', 'Badilisha', apply);
       else apply();
       break;
     }
