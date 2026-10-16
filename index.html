@@ -782,7 +782,10 @@ const pot = () => {
   return Math.max(0, (S.group.recipientPays || endMode()) ? n * a : (n - 1) * a);
 };
 const posho = () => Math.max(0, +S.group.posho || 0);
-const netPot = () => endMode() ? pot() : Math.max(0, pot() - posho());   // anachopokea baada ya posho
+// Kwa mzunguko wa siku/tarehe na zamu: mpokeaji analipwa kulingana na SIKU za mchezo (mchango x siku), si hisa
+const payBase = () => (S.group.cycle !== 'members' && !endMode() && cycleDays() > 0) ? Math.max(0, (+S.group.amount || 0) * cycleDays()) : pot();
+const shortfall = () => Math.max(0, payBase() - pot());   // pengo kwa siku: analipwa zaidi ya kinachokusanywa
+const netPot = () => endMode() ? pot() : Math.max(0, payBase() - posho());   // anachopokea baada ya posho
 const poshoBox = () => `<div class="pot-l">Baada ya posho ya kijumbe ${money(posho())}</div>`;
 const owed = (mid, tid) => {
   const m = S.members.find(x => x.id === mid); if (!m) return 0;
@@ -1614,7 +1617,7 @@ function vNyumbani() {
 
   const narr = `Kundi lina wanachama ${S.members.length} na hisa ${totalShares()}. Kila hisa inachangia ${money(S.group.amount)} kwa siku, kwa siku ${G}. Kila siku kundi linakusanya ${money(pot())}. `
     + (end ? 'Kila mtu anachukua pesa yake yote mwisho wa mchezo.'
-             : 'Kila siku mtu mmoja anapokea kwa zamu' + (posho() > 0 ? ', baada ya posho ya kijumbe.' : '.'));
+             : 'Kila siku mtu mmoja anapokea kwa zamu' + (posho() > 0 ? ', baada ya posho ya kijumbe.' : '.') + (shortfall() > 0 ? ' Mpokeaji analipwa ' + money(netPot()) + ' (kulingana na siku ' + cycleDays() + '). Pengo la ' + money(shortfall()) + ' kwa siku linabebwa na kijumbe.' : ''));
 
   const hi = Math.min(Math.max(0, todayIdx() >= 0 ? todayIdx() : defaultView()), G - 1), tid = S.order[hi], ds = turnDates();
   const payers = S.members.filter(x => owed(x.id, tid) > 0), nPaid = payers.filter(x => paidMap(tid)[x.id]).length;
@@ -1735,7 +1738,7 @@ function finishSummary() {
   const N = S.order.length;
   const doneN = S.order.filter(t => S.received[t]).length;
   const totalPaid = st.reduce((a, r) => a + r.paid, 0);
-  const taken = doneN * pot();
+  const taken = doneN * payBase();
   const left = st.reduce((a, r) => a + Math.max(0, r.total - r.paid), 0);
   return { st, N, doneN, totalPaid, taken, held: totalPaid - taken, left };
 }
@@ -2135,6 +2138,7 @@ function potPreview() {
     return t;
   }
   let t = `Mchango wa siku ${money(P)}, posho ${money(po)}, anayepokea anapata ${money(netPot())}.`;
+  if (shortfall() > 0) t += ` Mpokeaji analipwa kulingana na siku ${cycleDays()} (${money(payBase())}), lakini kinachokusanywa kwa siku ni ${money(P)}. Pengo la ${money(shortfall())} kwa siku (${money(shortfall() * cycleDays())} kwa mchezo mzima) linabebwa na kijumbe.`;
   if (po > 0) t += ` Kijumbe atapata ${money(S.order.length * po)} mchezo ukiisha.`;
   if (po > P) t += ' Posho ni kubwa kuliko mchango wa siku.';
   return t;
@@ -2654,7 +2658,8 @@ document.addEventListener('click', e => {
       const m = S.members.find(x => x.id === d.id); if (!m) break;
       const undo = () => { delete S.cashed[m.id]; if (S.cashAmt) delete S.cashAmt[m.id]; if (S.repaid) delete S.repaid[m.id]; save(); render(); toast(m.name + ': imetenguliwa'); };
       if (isCashed(m.id)) { if (returnedAmt(m) > 0 || (S.cashAmt && S.cashAmt[m.id] != null)) ask(`Tengua kuchukua pesa kwa <b>${esc(m.name)}</b>? Kiasi alichochukua na marejesho yaliyowekwa vitafutwa.`, 'Tengua', undo); else undo(); break; }
-      askAmount(`<b>${esc(m.name)}</b> amechukua kiasi gani?`, `Alichochanga ukiondoa posho ni ${money(entitled(m))}. Kama amechukua zaidi, ziada ni pesa za wengine atakazorudisha.`, entitled(m), 'Hifadhi', v => {
+      const full = Math.max(0, ((+S.group.amount || 0) * cycleDays() - posho()) * m.shares);
+      askAmount(`<b>${esc(m.name)}</b> amechukua kiasi gani?`, `Mchezo mzima kwa hisa zake, ukiondoa posho, ni ${money(full)}. Alichochanga hadi sasa ukiondoa posho ni ${money(entitled(m))}. Ziada ni pesa za wengine atakazorudisha kadiri anavyoendelea kuchanga.`, Math.max(full, entitled(m)), 'Hifadhi', v => {
         S.cashed = S.cashed || {}; S.cashAmt = S.cashAmt || {};
         S.cashed[m.id] = ymd(new Date()); S.cashAmt[m.id] = v; save(); render(); toast(m.name + ' amechukua ' + money(v));
       });
